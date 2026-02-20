@@ -175,12 +175,11 @@ class SOMIPart(nn.Module):
         K = self.config.spectral_K
         truncation = K if K > 0 and K < self.config.hidden_dim else None
         eigenvalues, eigenvectors, _ = compute_eigendecomposition(L_rw, truncation)
-        self.eigenvalues.copy_(
-            torch.zeros_like(self.eigenvalues).scatter_(
-                0, torch.arange(min(eigenvalues.shape[0], self.eigenvalues.shape[0]), device=self.device),
-                eigenvalues[:self.eigenvalues.shape[0]]
-            )
-        )
+        eigenvalues = eigenvalues.to(self.device)
+        eigenvectors = eigenvectors.to(self.device)
+        n = min(eigenvalues.shape[0], self.eigenvalues.shape[0])
+        self.eigenvalues.zero_()
+        self.eigenvalues[:n] = eigenvalues[:n]
         if eigenvectors.shape[1] <= self.eigenvectors.shape[1]:
             self.eigenvectors.zero_()
             self.eigenvectors[:, :eigenvectors.shape[1]] = eigenvectors
