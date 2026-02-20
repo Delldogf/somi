@@ -32,7 +32,7 @@ from somi.absorption.from_huggingface import (
 )
 from somi.absorption.fingerprint import compute_fingerprint
 from somi.absorption.integrity import check_integrity
-from somi.checkpoint import save_checkpoint, record_event
+from somi.checkpoint import save_checkpoint
 
 try:
     import wandb
@@ -208,8 +208,6 @@ def absorb_all():
         # Step 6: Checkpoint
         ckpt_path = CHECKPOINT_DIR / f"after_{i}_{model_id.replace('/', '_')}.pt"
         save_checkpoint(brain, str(ckpt_path), step=i)
-        record_event(brain, "absorb", {"source": model_id})
-
         # Step 7: Free disk
         clear_model_cache(model_id)
 
