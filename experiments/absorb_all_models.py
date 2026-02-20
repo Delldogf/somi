@@ -2,24 +2,24 @@
 Absorb All Models: Multi-Model Absorption into One SOMI Brain
 ===============================================================
 
-Downloads 10 open-source LLMs in parallel, then absorbs them
-sequentially into a single growing SOMI brain.
+Downloads and absorbs open-source LLMs one at a time into a single
+growing SOMI brain. Each model is downloaded, absorbed, then its
+cache is deleted to save disk space.
 
 Usage (on RunPod or any GPU machine):
     export HF_HOME=/workspace/.cache/huggingface
     python -m experiments.absorb_all_models
 
 The script:
-  Phase 1 — Downloads all models in parallel (background processes)
-  Phase 2 — Absorbs each model into SOMI (smallest first)
-  Phase 3 — Runs diagnostics and saves final checkpoint
+  For each model: Download -> Extract -> Absorb -> Delete cache
+  Final: Run diagnostics and save checkpoint
 """
 
 import os
 import sys
 import time
 import json
-import subprocess
+import shutil
 import torch
 from pathlib import Path
 from datetime import datetime
@@ -34,7 +34,6 @@ from somi.absorption.fingerprint import compute_fingerprint
 from somi.absorption.integrity import check_integrity
 from somi.checkpoint import save_checkpoint, record_event
 
-# Optional: W&B
 try:
     import wandb
     HAS_WANDB = True
@@ -42,20 +41,18 @@ except ImportError:
     HAS_WANDB = False
 
 # ============================================================
-# Configuration
+# Configuration — all non-gated models (no license click needed)
 # ============================================================
 
 MODELS = [
     ("Qwen/Qwen2.5-0.5B", "0.5B"),
     ("TinyLlama/TinyLlama-1.1B-Chat-v1.0", "1.1B"),
+    ("Qwen/Qwen2.5-1.5B", "1.5B"),
     ("stabilityai/stablelm-2-1_6b", "1.6B"),
-    ("google/gemma-2-2b", "2B"),
     ("microsoft/phi-2", "2.7B"),
+    ("EleutherAI/pythia-2.8b", "2.8B"),
     ("Qwen/Qwen2.5-3B", "3B"),
-    ("meta-llama/Llama-3.2-3B", "3B"),
-    ("mistralai/Mistral-7B-v0.3", "7B"),
     ("Qwen/Qwen2.5-7B", "7B"),
-    ("meta-llama/Llama-3.1-8B", "8B"),
 ]
 
 SOMI_HIDDEN = 256
@@ -70,183 +67,136 @@ LOG_FILE = Path("/workspace/absorb_results.json")
 
 
 # ============================================================
-# Phase 1: Parallel Download
+# Download + Absorb (one model at a time to save disk)
 # ============================================================
 
-def download_all_models():
-    """Launch parallel downloads for all models. Returns list of processes."""
+def download_model(model_id):
+    """Download a single model. Returns True on success."""
+    from huggingface_hub import snapshot_download
+    try:
+        snapshot_download(model_id, ignore_patterns=["*.gguf", "*.bin.index.json"])
+        return True
+    except Exception as e:
+        print(f"    Download failed: {e}")
+        return False
+
+
+def clear_model_cache(model_id):
+    """Delete cached model files to free disk space."""
+    hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+    hub_dir = Path(hf_home) / "hub"
+    safe_name = "models--" + model_id.replace("/", "--")
+    cache_path = hub_dir / safe_name
+    if cache_path.exists():
+        size_mb = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file()) / 1e6
+        shutil.rmtree(cache_path, ignore_errors=True)
+        print(f"    Freed {size_mb:.0f} MB from cache")
+
+
+def absorb_all():
+    """Download, absorb, and delete each model one at a time."""
     print("\n" + "=" * 70)
-    print("  PHASE 1: DOWNLOADING ALL MODELS IN PARALLEL")
+    print("  ABSORBING MODELS INTO SOMI (one at a time)")
     print("=" * 70)
-
-    processes = []
-    for model_id, size in MODELS:
-        print(f"  Starting download: {model_id} ({size})...")
-        env = os.environ.copy()
-        proc = subprocess.Popen(
-            [sys.executable, "-c",
-             f"from huggingface_hub import snapshot_download; "
-             f"snapshot_download('{model_id}', ignore_patterns=['*.gguf', '*.bin.index.json'])"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
-        processes.append((model_id, size, proc))
-
-    return processes
-
-
-def wait_for_downloads(processes):
-    """Wait for all downloads to complete. Returns list of (model_id, success)."""
-    print("\n  Waiting for downloads to complete...")
-    results = []
-    for model_id, size, proc in processes:
-        proc.wait()
-        success = proc.returncode == 0
-        status = "OK" if success else f"FAILED (exit {proc.returncode})"
-        if not success:
-            stderr = proc.stderr.read().decode()[-500:]
-            print(f"  {model_id}: {status}")
-            print(f"    Error: {stderr}")
-        else:
-            print(f"  {model_id} ({size}): {status}")
-        results.append((model_id, size, success))
-    return results
-
-
-# ============================================================
-# Phase 2: Sequential Absorption
-# ============================================================
-
-def absorb_all(download_results):
-    """Absorb each successfully downloaded model into SOMI."""
-    print("\n" + "=" * 70)
-    print("  PHASE 2: ABSORBING INTO SOMI")
-    print("=" * 70)
-
-    available = [(mid, size) for mid, size, ok in download_results if ok]
-    if not available:
-        print("  ERROR: No models downloaded successfully!")
-        return None, {}
-
-    print(f"  Models available: {len(available)}/{len(MODELS)}")
+    print(f"  Models: {len(MODELS)}")
     print(f"  SOMI config: H={SOMI_HIDDEN}, P={SOMI_PARTS}, device={DEVICE}")
     print(f"  Method: {METHOD}, Strength: {STRENGTH}")
 
-    # Create initial SOMI brain — use first model's vocab size
-    print(f"\n  Extracting first model to determine vocab size...")
-    first_weights = extract_transformer_weights(
-        available[0][0], device=DEVICE
-    )
-    vocab_size = first_weights['vocab_size']
-    print(f"  Vocab size: {vocab_size}")
-
+    brain = None
     config = SOMIBrainConfig.auto(SOMI_HIDDEN, SOMI_PARTS)
-    brain = SOMICircuitBrain(config, input_dim=SOMI_HIDDEN, output_dim=vocab_size)
-    brain = brain.to(DEVICE)
-    print(f"  SOMI brain created: {sum(p.numel() for p in brain.parameters())} parameters")
+    all_results = {}
+    absorbed_count = 0
 
-    # Init W&B
     if HAS_WANDB:
         wandb.init(
             project="somi-absorb-all",
-            name=f"absorb-{len(available)}-models-{datetime.now().strftime('%Y%m%d_%H%M')}",
+            name=f"absorb-{len(MODELS)}-models-{datetime.now().strftime('%Y%m%d_%H%M')}",
             config={
                 "somi_hidden": SOMI_HIDDEN,
                 "somi_parts": SOMI_PARTS,
                 "strength": STRENGTH,
                 "method": METHOD,
-                "n_models": len(available),
-                "models": [m for m, _ in available],
+                "n_models": len(MODELS),
+                "models": [m for m, _ in MODELS],
                 "device": DEVICE,
             },
         )
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    all_results = {}
-    brain_events = []
 
-    # Absorb first model (already extracted)
-    fp_before = compute_fingerprint(brain)
-    print(f"\n{'='*60}")
-    print(f"  [{1}/{len(available)}] Absorbing: {available[0][0]} ({available[0][1]})")
-    print(f"{'='*60}")
-
-    diag = absorb_weights_into_brain(brain, first_weights, strength=STRENGTH, method=METHOD)
-    del first_weights
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-    fp_after = compute_fingerprint(brain)
-    integrity = check_integrity(brain, verbose=True)
-
-    result = _log_absorption(
-        brain, available[0][0], available[0][1], 1, len(available),
-        diag, fp_before, fp_after, integrity
-    )
-    all_results[available[0][0]] = result
-    brain_events.append({"event": "absorb", "model": available[0][0], "step": 1})
-
-    ckpt_path = CHECKPOINT_DIR / f"after_{1}_{available[0][0].replace('/', '_')}.pt"
-    save_checkpoint(brain, str(ckpt_path), step=1)
-    record_event(brain, "absorb", {"source": available[0][0]})
-
-    # Absorb remaining models
-    for i, (model_id, size) in enumerate(available[1:], start=2):
+    for i, (model_id, size) in enumerate(MODELS, start=1):
         print(f"\n{'='*60}")
-        print(f"  [{i}/{len(available)}] Absorbing: {model_id} ({size})")
+        print(f"  [{i}/{len(MODELS)}] {model_id} ({size})")
         print(f"{'='*60}")
 
-        fp_before = compute_fingerprint(brain)
+        # Step 1: Download
+        print(f"  Downloading...")
+        t0 = time.time()
+        ok = download_model(model_id)
+        print(f"  Download: {'OK' if ok else 'FAILED'} ({time.time()-t0:.0f}s)")
+        if not ok:
+            all_results[model_id] = {"status": "download_failed"}
+            continue
 
+        # Step 2: Extract weights
+        print(f"  Extracting weights...")
         try:
             weights = extract_transformer_weights(model_id, device=DEVICE)
         except Exception as e:
-            print(f"  SKIP: Failed to extract {model_id}: {e}")
+            print(f"  SKIP: Extract failed: {e}")
             all_results[model_id] = {"status": "extract_failed", "error": str(e)}
+            clear_model_cache(model_id)
             continue
 
-        # Handle vocab size changes — use max of current and new
+        # Step 3: Create or expand brain
         new_vocab = weights['vocab_size']
-        current_vocab = brain.y_decoder.out_features
-        if new_vocab > current_vocab:
-            print(f"  Vocab expansion: {current_vocab} -> {new_vocab}")
-            old_state = brain.state_dict()
-            brain = SOMICircuitBrain(
-                brain.config, input_dim=SOMI_HIDDEN, output_dim=new_vocab
-            )
-            brain.load_state_dict(old_state, strict=False)
+        if brain is None:
+            print(f"  Creating SOMI brain (vocab={new_vocab})...")
+            brain = SOMICircuitBrain(config, input_dim=SOMI_HIDDEN, output_dim=new_vocab)
             brain = brain.to(DEVICE)
+            print(f"  Params: {sum(p.numel() for p in brain.parameters())}")
+        else:
+            current_vocab = brain.y_decoder.out_features
+            if new_vocab > current_vocab:
+                print(f"  Vocab expansion: {current_vocab} -> {new_vocab}")
+                old_state = brain.state_dict()
+                brain = SOMICircuitBrain(config, input_dim=SOMI_HIDDEN, output_dim=new_vocab)
+                brain.load_state_dict(old_state, strict=False)
+                brain = brain.to(DEVICE)
 
+        # Step 4: Absorb
+        fp_before = compute_fingerprint(brain)
+        print(f"  Absorbing...")
         try:
-            diag = absorb_weights_into_brain(
-                brain, weights, strength=STRENGTH, method=METHOD
-            )
+            diag = absorb_weights_into_brain(brain, weights, strength=STRENGTH, method=METHOD)
         except Exception as e:
-            print(f"  SKIP: Failed to absorb {model_id}: {e}")
+            print(f"  SKIP: Absorb failed: {e}")
             all_results[model_id] = {"status": "absorb_failed", "error": str(e)}
             del weights
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            clear_model_cache(model_id)
             continue
 
         del weights
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
+        # Step 5: Check integrity
         fp_after = compute_fingerprint(brain)
         integrity = check_integrity(brain, verbose=True)
-
-        result = _log_absorption(
-            brain, model_id, size, i, len(available),
-            diag, fp_before, fp_after, integrity
-        )
+        result = _log_absorption(brain, model_id, size, i, len(MODELS), diag, fp_before, fp_after, integrity)
         all_results[model_id] = result
-        brain_events.append({"event": "absorb", "model": model_id, "step": i})
+        absorbed_count += 1
 
+        # Step 6: Checkpoint
         ckpt_path = CHECKPOINT_DIR / f"after_{i}_{model_id.replace('/', '_')}.pt"
         save_checkpoint(brain, str(ckpt_path), step=i)
         record_event(brain, "absorb", {"source": model_id})
 
-        print(f"  SOMI state: H={config.hidden_dim}, P={config.n_parts}, "
-              f"params={sum(p.numel() for p in brain.parameters())}")
+        # Step 7: Free disk
+        clear_model_cache(model_id)
+
+        print(f"  Done. Params={sum(p.numel() for p in brain.parameters())}, "
+              f"Absorbed={absorbed_count}/{i}")
 
     return brain, all_results
 
@@ -378,25 +328,12 @@ def main():
     print(f"  Time: {datetime.now().isoformat()}")
     print("=" * 70)
 
-    # Phase 1: Download
-    processes = download_all_models()
-    download_results = wait_for_downloads(processes)
-
-    download_time = time.time() - start_time
-    print(f"\n  Downloads complete in {download_time:.0f}s")
-
-    # Phase 2: Absorb
-    absorb_start = time.time()
-    brain, all_results = absorb_all(download_results)
+    brain, all_results = absorb_all()
 
     if brain is None:
         print("\n  FAILED: No models were absorbed.")
         sys.exit(1)
 
-    absorb_time = time.time() - absorb_start
-    print(f"\n  Absorption complete in {absorb_time:.0f}s")
-
-    # Phase 3: Diagnostics
     summary = final_diagnostics(brain, all_results)
 
     total_time = time.time() - start_time
@@ -405,7 +342,6 @@ def main():
     print(f"  Models absorbed: {summary['n_models_absorbed']}/{len(MODELS)}")
     print(f"  All healthy: {summary['all_healthy']}")
     print(f"  Total time: {total_time:.0f}s ({total_time/60:.1f} min)")
-    print(f"  Download: {download_time:.0f}s, Absorb: {absorb_time:.0f}s")
     print("=" * 70)
 
 
