@@ -161,7 +161,15 @@ def absorb_all():
                 print(f"  Vocab expansion: {current_vocab} -> {new_vocab}")
                 old_state = brain.state_dict()
                 brain = SOMICircuitBrain(config, input_dim=SOMI_HIDDEN, output_dim=new_vocab)
-                brain.load_state_dict(old_state, strict=False)
+                new_state = brain.state_dict()
+                for k, v in old_state.items():
+                    if k in new_state:
+                        if v.shape == new_state[k].shape:
+                            new_state[k] = v
+                        elif v.dim() >= 1 and v.shape[0] <= new_state[k].shape[0]:
+                            slices = [slice(0, s) for s in v.shape]
+                            new_state[k][tuple(slices)] = v
+                brain.load_state_dict(new_state)
                 brain = brain.to(DEVICE)
 
         # Step 4: Absorb
