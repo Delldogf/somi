@@ -172,6 +172,16 @@ def absorb_all():
                 brain.load_state_dict(new_state)
                 brain = brain.to(DEVICE)
 
+        # Step 3b: Move extracted weights to DEVICE to avoid CPU/CUDA mismatch
+        for layer in weights['layers']:
+            for k, v in layer.items():
+                if isinstance(v, torch.Tensor):
+                    layer[k] = v.to(DEVICE)
+        if weights.get('embed_weight') is not None:
+            weights['embed_weight'] = weights['embed_weight'].to(DEVICE)
+        if weights.get('lm_head_weight') is not None:
+            weights['lm_head_weight'] = weights['lm_head_weight'].to(DEVICE)
+
         # Step 4: Absorb
         fp_before = compute_fingerprint(brain)
         print(f"  Absorbing...")
