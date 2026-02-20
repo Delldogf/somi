@@ -224,12 +224,14 @@ class KalmanSpectralFuser:
             measurement_noise: R — how noisy this source is (higher = trust less)
             model_weight: extra weighting (e.g., proportional to model size)
         """
-        K = min(eigenvalues.shape[0], self.n_modes)
+        K_eval = min(eigenvalues.shape[0], self.n_modes)
+        K_evec = min(eigenvectors.shape[1], self.n_modes)
+        K = min(K_eval, K_evec)
         device = eigenvalues.device
 
         # Pad eigenvalues to n_modes if needed
         z = torch.zeros(self.n_modes, device=device)
-        z[:K] = eigenvalues[:K]
+        z[:K] = eigenvalues[-K:]  # take the largest K eigenvalues
 
         # Measurement noise (higher for smaller/noisier models)
         R = torch.ones(self.n_modes, device=device) * measurement_noise
@@ -256,7 +258,9 @@ class KalmanSpectralFuser:
             self.v_sum = torch.zeros(dim, self.n_modes)
 
         weight = (K_gain[:K] * model_weight).cpu()
-        self.v_sum[:dim, :K] += eigenvectors[:, :K].cpu() * weight.unsqueeze(0)
+        evecs_slice = eigenvectors[:, -K:].cpu()  # take last K columns (highest modes)
+        dim_use = min(dim, self.v_sum.shape[0])
+        self.v_sum[:dim_use, :K] += evecs_slice[:dim_use, :] * weight.unsqueeze(0)
         self.v_weight_sum[:K] += weight
 
         self.n_absorbed += 1
@@ -325,10 +329,17 @@ def install_spectrum_into_part(
     H = part.config.hidden_dim
     device = part.W_local.device
     K = min(eigenvalues.shape[0], eigenvectors.shape[1], H)
+    evec_dim = eigenvectors.shape[0]
 
     with torch.no_grad():
-        evals = eigenvalues[:K].to(device).float()
-        evecs = eigenvectors[:H, :K].to(device).float()
+        evals = eigenvalues[-K:].to(device).float()  # highest K modes
+        # If eigenvectors are smaller than H, pad with zeros
+        if evec_dim < H:
+            padded = torch.zeros(H, K, device=device)
+            padded[:evec_dim, :] = eigenvectors[:, -K:].to(device).float()
+            evecs = padded
+        else:
+            evecs = eigenvectors[:H, -K:].to(device).float()
 
         # Reconstruct W from spectral content
         W_new = evecs @ torch.diag(evals.abs()) @ evecs.T
@@ -687,7 +698,9 @@ def lossless_absorb_all(
                 continue
 
             # Average eigenvalues across layers in this group
-            min_k = min(e.shape[0] for e in group_evals)
+            min_k_eval = min(e.shape[0] for e in group_evals)
+            min_k_evec = min(v.shape[1] for v in group_evecs)
+            min_k = min(min_k_eval, min_k_evec)
             avg_evals = torch.stack([e[-min_k:] for e in group_evals]).mean(0)
 
             # Average eigenvectors
