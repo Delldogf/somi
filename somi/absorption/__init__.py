@@ -39,3 +39,15 @@ from .from_huggingface import (
     extract_transformer_weights,
     absorb_weights_into_brain,
 )
+from .lossless import (
+    lossless_absorb_all,
+    lossless_spectral_extract,
+    procrustes_align,
+    KalmanSpectralFuser,
+    install_spectrum_into_part,
+    fullrank_vocab_transfer,
+)
+from .spectral_analysis import (
+    marchenko_pastur_threshold,
+    analyze_full_model,
+)
