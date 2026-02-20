@@ -104,7 +104,8 @@ def main():
     print(f"\n  Forward pass test...")
     try:
         with torch.no_grad():
-            x = torch.randn(2, 16, brain.config.hidden_dim, device=DEVICE)
+            input_dim = brain.x_encoder.in_features
+            x = torch.randn(2, 16, input_dim, device=DEVICE)
             output = brain(x)
             if isinstance(output, tuple):
                 out_tensor = output[0]

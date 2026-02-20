@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-02-20T02:16:05.882395",
+  "device": "cuda",
+  "somi_config": {
+    "hidden_dim": 256,
+    "n_parts": 4
+  },
+  "n_models_attempted": 8,
+  "n_models_absorbed": 8,
+  "all_healthy": false,
+  "final_output_shape": [
+    2,
+    16,
+    152064
+  ],
+  "results": {
+    "Qwen/Qwen2.5-0.5B": {
+      "status": "ok",
+      "model": "Qwen/Qwen2.5-0.5B",
+      "size": "0.5B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.4995860811215095,
+      "avg_spectral_gap": 0.793163099559024
+    },
+    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {
+      "status": "ok",
+      "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+      "size": "1.1B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.2718477113826177,
+      "avg_spectral_gap": 0.8701413908565883
+    },
+    "Qwen/Qwen2.5-1.5B": {
+      "status": "ok",
+      "model": "Qwen/Qwen2.5-1.5B",
+      "size": "1.5B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.3637022920931465,
+      "avg_spectral_gap": 0.9468849014665466
+    },
+    "stabilityai/stablelm-2-1_6b": {
+      "status": "ok",
+      "model": "stabilityai/stablelm-2-1_6b",
+      "size": "1.6B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.25718802148670694,
+      "avg_spectral_gap": 0.9763848212751327
+    },
+    "microsoft/phi-2": {
+      "status": "ok",
+      "model": "microsoft/phi-2",
+      "size": "2.7B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.2798915785218833,
+      "avg_spectral_gap": 0.9763848212751327
+    },
+    "EleutherAI/pythia-2.8b": {
+      "status": "ok",
+      "model": "EleutherAI/pythia-2.8b",
+      "size": "2.8B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.2596290044247078,
+      "avg_spectral_gap": 0.9763848212751327
+    },
+    "Qwen/Qwen2.5-3B": {
+      "status": "ok",
+      "model": "Qwen/Qwen2.5-3B",
+      "size": "3B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.29781009215791726,
+      "avg_spectral_gap": 0.9633909288386349
+    },
+    "Qwen/Qwen2.5-7B": {
+      "status": "ok",
+      "model": "Qwen/Qwen2.5-7B",
+      "size": "7B",
+      "healthy": false,
+      "vocab_absorbed": true,
+      "svd_energy": 0.3605313583562995,
+      "avg_spectral_gap": 0.9402748177817557
+    }
+  }
+}

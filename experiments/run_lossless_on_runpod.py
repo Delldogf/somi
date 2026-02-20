@@ -70,7 +70,7 @@ def ssh_cmd_stream(host, port, cmd, timeout=7200):
     proc = subprocess.Popen(
         ssh, shell=True,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1,
+        text=True, bufsize=1, encoding='utf-8', errors='replace',
     )
     try:
         for line in iter(proc.stdout.readline, ''):
